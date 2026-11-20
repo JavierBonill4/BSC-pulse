@@ -1,5 +1,7 @@
 """Tests for fetching alert context from Prometheus, with a fake HTTP session."""
 
+from __future__ import annotations
+
 import json
 
 import pytest

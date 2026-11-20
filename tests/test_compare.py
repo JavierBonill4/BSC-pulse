@@ -1,5 +1,7 @@
 """Tests for the comparison logic. No network: probe results are built by hand."""
 
+from __future__ import annotations
+
 import pytest
 
 from bsc_pulse import rpc

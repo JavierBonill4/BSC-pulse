@@ -5,8 +5,9 @@ line-length = 100
 target-version = "py39"
 
 [tool.ruff.lint]
-# E/F: basic errors, I: import order, B: likely bugs, UP: outdated syntax, SIM: simplifications
-select = ["E", "F", "I", "B", "UP", "SIM"]
+# E/F: basic errors, I: import order, B: likely bugs, UP: outdated syntax, SIM: simplifications,
+# FA: "str | None" needs `from __future__ import annotations` on Python 3.9 (macOS's default python3)
+select = ["E", "F", "I", "B", "UP", "SIM", "FA"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
