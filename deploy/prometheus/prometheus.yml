@@ -1,0 +1,17 @@
+# Prometheus config for the Docker Compose stack.
+# Service names (bsc-pulse, prometheus) resolve inside the compose network.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # The watchdog sweeps every 5 s, so scrape it at the same rhythm.
+  - job_name: bsc-pulse
+    scrape_interval: 5s
+    static_configs:
+      - targets: ["bsc-pulse:9105"]

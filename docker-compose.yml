@@ -1,0 +1,32 @@
+# Local and server stack. Same file on a Mac (Docker Desktop) and on the AWS host.
+#
+# Every port is published on 127.0.0.1 only, so nothing is reachable from outside
+# the machine. On the server, reach the UIs through an SSH tunnel.
+
+services:
+  bsc-pulse:
+    build: .
+    image: bsc-pulse:local
+    restart: unless-stopped
+    environment:
+      BSC_PULSE_INTERVAL: ${BSC_PULSE_INTERVAL:-5}
+      BSC_PULSE_TIMEOUT: ${BSC_PULSE_TIMEOUT:-3}
+    ports:
+      - "127.0.0.1:9105:9105"
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - bsc-pulse
+
+volumes:
+  prometheus-data:

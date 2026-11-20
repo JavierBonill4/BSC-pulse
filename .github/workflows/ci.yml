@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format check
+        run: ruff format --check .
+
+      # Tests use fake HTTP sessions, so CI never depends on a public RPC being up.
+      - name: Tests
+        run: pytest -q
+
+  # The container image and the Prometheus config must stay valid too.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the watchdog image
+        run: docker build -t bsc-pulse:ci .
+
+      - name: Check the Prometheus config
+        run: >-
+          docker run --rm -v "$PWD/deploy/prometheus:/etc/prometheus:ro"
+          --entrypoint promtool prom/prometheus:v3.5.0
+          check config /etc/prometheus/prometheus.yml
+
+      - name: Check the Compose file
+        run: docker compose config --quiet

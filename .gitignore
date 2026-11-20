@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Secrets - never commit
+.env
+*.pem
+*.key
+
+# Terraform (used from the deploy step)
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.auto.tfvars
+crash.log
+
+# Ansible (used from the deploy step)
+infra/ansible/inventory/hosts.ini
+*.retry
+
+# macOS
+.DS_Store

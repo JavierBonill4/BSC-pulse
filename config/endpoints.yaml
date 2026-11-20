@@ -1,0 +1,27 @@
+# Public BSC RPC endpoints to watch.
+#
+# Source: https://docs.bnbchain.org/bnb-smart-chain/developers/json_rpc/json-rpc-endpoint/
+# Every URL below is copied from that page. All ten answered a live probe on 2026-11-15.
+# The page gives a rate limit of 10K requests per 5 minutes and says eth_getLogs is
+# disabled on the public mainnet endpoints. This tool never calls eth_getLogs.
+#
+# Endpoints are only ever compared with others in the same network.
+
+networks:
+  mainnet:
+    chain_id: 56
+    endpoints:
+      - https://bsc-dataseed.bnbchain.org
+      - https://bsc-dataseed-public.bnbchain.org
+      - https://bsc-dataseed.nariox.org
+      - https://bsc-dataseed.defibit.io
+      - https://bsc-dataseed.ninicoin.io
+      - https://bsc.nodereal.io
+      - https://rpc-bnb.blockmachine.io
+
+  chapel:
+    chain_id: 97
+    endpoints:
+      - https://bsc-testnet-dataseed.bnbchain.org
+      - https://bsc-testnet.bnbchain.org
+      - https://bsc-prebsc-dataseed.bnbchain.org
