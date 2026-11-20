@@ -20,6 +20,8 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=15d
+      # Links in alerts point here; it works through the SSH tunnel on the server.
+      - --web.external-url=http://127.0.0.1:9090
     volumes:
       - ./deploy/prometheus:/etc/prometheus:ro
       - prometheus-data:/prometheus
@@ -28,5 +30,35 @@ services:
     depends_on:
       - bsc-pulse
 
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.external-url=http://127.0.0.1:9093
+    volumes:
+      - ./deploy/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+
+  # Same image as the watchdog, different command.
+  notifier:
+    image: bsc-pulse:local
+    restart: unless-stopped
+    command: ["python", "-m", "bsc_pulse.notifier"]
+    environment:
+      NOTIFIER_LISTEN: 0.0.0.0:9106
+      PROMETHEUS_URL: http://prometheus:9090
+      # Read from .env next to this file (git-ignored). Empty = dry run to the log.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    ports:
+      - "127.0.0.1:9106:9106"
+    depends_on:
+      - bsc-pulse
+
 volumes:
   prometheus-data:
+  alertmanager-data:

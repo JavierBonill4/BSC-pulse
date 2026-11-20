@@ -1,0 +1,241 @@
+# Unit tests for rules/bsc.yml. Run with: make rules-test
+#
+# Each test feeds made-up metric history into the rules, then checks which alerts
+# are firing at given moments. "1x4 7x12" means: value 1 for 5 samples, then 7 for
+# 13 samples, one sample per `interval`.
+
+rule_files:
+  - ../rules/bsc.yml
+
+evaluation_interval: 15s
+
+tests:
+  # The core idea: lag must last 2 minutes before anyone is told.
+  - name: lagging endpoint fires after 2 minutes, a short spike does not
+    interval: 15s
+    input_series:
+      - series: 'bsc_endpoint_lag_seconds{network="mainnet", endpoint="slow"}'
+        values: "1x4 7x16"
+      - series: 'bsc_endpoint_lag_seconds{network="mainnet", endpoint="blip"}'
+        values: "1x4 7x3 1x13"
+    alert_rule_test:
+      - alertname: BscEndpointLagging
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: BscEndpointLagging
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels: {severity: warning, scope: endpoint, network: mainnet, endpoint: slow}
+            exp_annotations:
+              summary: "slow (mainnet) is 7s behind the highest endpoint"
+              description: "Its head is older than the newest head on the network, for 2 minutes."
+
+  # Stalled endpoint and stalled chain are different problems with different alerts.
+  - name: stuck endpoint while the network moves is an endpoint stall, not a chain stall
+    interval: 15s
+    input_series:
+      - series: 'bsc_endpoint_head_unchanged_seconds{network="mainnet", endpoint="stuck"}'
+        values: "0+15x10"
+      - series: 'bsc_network_head_unchanged_seconds{network="mainnet"}'
+        values: "0x10"
+      - series: 'bsc_network_usable_endpoints{network="mainnet"}'
+        values: "7x10"
+    alert_rule_test:
+      - alertname: BscEndpointStalled
+        eval_time: 1m30s
+        exp_alerts:
+          - exp_labels: {severity: critical, scope: endpoint, network: mainnet, endpoint: stuck}
+            exp_annotations:
+              summary: "stuck (mainnet) has been stuck on the same block for 1m 30s"
+              description: "Other endpoints on the network are still producing new heads."
+      - alertname: BscChainStalled
+        eval_time: 1m30s
+        exp_alerts: []
+
+  - name: nothing moving anywhere is a chain stall, and no endpoint stall
+    interval: 15s
+    input_series:
+      - series: 'bsc_endpoint_head_unchanged_seconds{network="chapel", endpoint="a"}'
+        values: "0+15x10"
+      - series: 'bsc_network_head_unchanged_seconds{network="chapel"}'
+        values: "0+15x10"
+      - series: 'bsc_network_usable_endpoints{network="chapel"}'
+        values: "3x10"
+    alert_rule_test:
+      - alertname: BscChainStalled
+        eval_time: 30s
+        exp_alerts: []
+      - alertname: BscChainStalled
+        eval_time: 1m15s
+        exp_alerts:
+          - exp_labels: {severity: critical, scope: network, network: chapel}
+            exp_annotations:
+              summary: "No new chapel block seen on any endpoint for 1m 15s"
+              description: "Either the chain has stopped producing blocks, or every endpoint we watch is stuck at the same height."
+      - alertname: BscEndpointStalled
+        eval_time: 1m15s
+        exp_alerts: []
+
+  - name: endpoint down for 2 minutes, and the network can no longer compare
+    interval: 15s
+    input_series:
+      - series: 'bsc_endpoint_up{network="chapel", endpoint="a"}'
+        values: "1 0x12"
+      - series: 'bsc_network_usable_endpoints{network="chapel"}'
+        values: "2 1x12"
+    alert_rule_test:
+      - alertname: BscEndpointDown
+        eval_time: 1m45s
+        exp_alerts: []
+      - alertname: BscEndpointDown
+        eval_time: 2m30s
+        exp_alerts:
+          - exp_labels: {severity: warning, scope: endpoint, network: chapel, endpoint: a}
+            exp_annotations:
+              summary: "a (chapel) has not returned a valid latest block for 2 minutes"
+              description: "Requests fail, or it answers for the wrong chain."
+      - alertname: BscTooFewEndpoints
+        eval_time: 2m30s
+        exp_alerts:
+          - exp_labels: {severity: critical, scope: network, network: chapel}
+            exp_annotations:
+              summary: "Only 1 usable endpoint(s) left on chapel"
+              description: "Lag detection needs at least two usable endpoints to compare."
+
+  - name: wrong chain and syncing
+    interval: 15s
+    input_series:
+      - series: 'bsc_endpoint_wrong_chain{network="mainnet", endpoint="odd"}'
+        values: "1x30"
+      - series: 'bsc_endpoint_syncing{network="mainnet", endpoint="new"}'
+        values: "1x30"
+    alert_rule_test:
+      - alertname: BscEndpointWrongChain
+        eval_time: 1m
+        exp_alerts:
+          - exp_labels: {severity: critical, scope: endpoint, network: mainnet, endpoint: odd}
+            exp_annotations:
+              summary: "odd answers with the wrong chain ID for mainnet"
+              description: "eth_chainId does not match the configured chain. Anyone using it would read or send on another network."
+      - alertname: BscEndpointSyncing
+        eval_time: 4m
+        exp_alerts: []
+      - alertname: BscEndpointSyncing
+        eval_time: 5m
+        exp_alerts:
+          - exp_labels: {severity: warning, scope: endpoint, network: mainnet, endpoint: new}
+            exp_annotations:
+              summary: "new (mainnet) reports that it is syncing"
+              description: "eth_syncing has returned progress instead of false for 5 minutes."
+
+  # Counters: 10 ok + 3 timeouts per 15 s is a 23% error rate. 100 ok + 1 timeout is 1%.
+  - name: error rate above 10 percent for 5 minutes
+    interval: 15s
+    input_series:
+      - series: 'bsc_rpc_requests_total{network="mainnet", endpoint="bad", method="eth_getBlockByNumber", outcome="ok"}'
+        values: "0+10x60"
+      - series: 'bsc_rpc_requests_total{network="mainnet", endpoint="bad", method="eth_getBlockByNumber", outcome="timeout"}'
+        values: "0+3x60"
+      - series: 'bsc_rpc_requests_total{network="mainnet", endpoint="fine", method="eth_getBlockByNumber", outcome="ok"}'
+        values: "0+100x60"
+      - series: 'bsc_rpc_requests_total{network="mainnet", endpoint="fine", method="eth_getBlockByNumber", outcome="timeout"}'
+        values: "0+1x60"
+    alert_rule_test:
+      - alertname: BscEndpointErrorRate
+        eval_time: 10m
+        exp_alerts:
+          - exp_labels: {severity: warning, scope: endpoint, network: mainnet, endpoint: bad}
+            exp_annotations:
+              summary: "23.08% of requests to bad (mainnet) are failing"
+              description: "More than 10% of JSON-RPC requests failed over the last 5 minutes."
+
+  - name: rate limiting is counted whether it came as HTTP 429 or as error -32005
+    interval: 15s
+    input_series:
+      - series: 'bsc_rpc_requests_total{network="mainnet", endpoint="busy", method="eth_getBlockByNumber", outcome="rate_limited"}'
+        values: "0+1x30"
+      - series: 'bsc_rpc_requests_total{network="mainnet", endpoint="calm", method="eth_getBlockByNumber", outcome="rate_limited"}'
+        values: "0x30"
+    alert_rule_test:
+      - alertname: BscEndpointRateLimited
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels: {severity: warning, scope: endpoint, network: mainnet, endpoint: busy}
+            exp_annotations:
+              summary: "busy (mainnet) rate-limited us 20 times in 5 minutes"
+              description: "HTTP 429 or JSON-RPC error -32005 (limit exceeded)."
+
+  # Every request takes ~1.5 s: all land between the 1 s and 2 s buckets.
+  - name: p95 latency above 1 second for 10 minutes
+    interval: 15s
+    input_series:
+      - series: 'bsc_rpc_latency_seconds_bucket{network="mainnet", endpoint="far", le="0.5"}'
+        values: "0x60"
+      - series: 'bsc_rpc_latency_seconds_bucket{network="mainnet", endpoint="far", le="1"}'
+        values: "0x60"
+      - series: 'bsc_rpc_latency_seconds_bucket{network="mainnet", endpoint="far", le="2"}'
+        values: "0+3x60"
+      - series: 'bsc_rpc_latency_seconds_bucket{network="mainnet", endpoint="far", le="+Inf"}'
+        values: "0+3x60"
+    alert_rule_test:
+      - alertname: BscEndpointSlow
+        eval_time: 8m
+        exp_alerts: []
+      - alertname: BscEndpointSlow
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels: {severity: warning, scope: endpoint, network: mainnet, endpoint: far}
+            exp_annotations:
+              summary: "p95 latency of far (mainnet) is 1.95s"
+              description: "95th percentile of successful latest-block requests above 1 s for 10 minutes."
+
+  - name: block hash events
+    interval: 15s
+    input_series:
+      - series: 'bsc_reorg_blocks_total{network="mainnet"}'
+        values: "0x10 1x30"
+      - series: 'bsc_hash_disagreements_total{network="mainnet"}'
+        values: "0x10 2x30"
+      - series: 'bsc_endpoint_head_regressions_total{network="mainnet", endpoint="lb"}'
+        values: "0+1x40"
+    alert_rule_test:
+      - alertname: BscReorgObserved
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels: {severity: warning, scope: network, network: mainnet}
+            exp_annotations:
+              summary: "A mainnet block we had already seen was replaced (1 in 10 minutes)"
+              description: "A reorg past the head. With fast finality these should be very shallow and rare."
+      - alertname: BscHashDisagreement  # 2 disagreements is under the threshold of 3
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: BscEndpointHeadFlapping
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels: {severity: warning, scope: endpoint, network: mainnet, endpoint: lb}
+            exp_annotations:
+              summary: "lb (mainnet) reported a lower head than before 12 times in 10 minutes"
+              description: "Consecutive requests seem to reach nodes at different heights."
+
+  - name: the watchdog itself
+    interval: 15s
+    input_series:
+      - series: 'up{job="bsc-pulse", instance="bsc-pulse:9105"}'
+        values: "1 0x10"
+      - series: 'bsc_last_sweep_timestamp_seconds{job="bsc-pulse", instance="bsc-pulse:9105"}'
+        values: "0x20"
+    alert_rule_test:
+      - alertname: BscPulseDown
+        eval_time: 1m30s
+        exp_alerts:
+          - exp_labels: {severity: critical, scope: watchdog, job: bsc-pulse, instance: "bsc-pulse:9105"}
+            exp_annotations:
+              summary: "The BSC Pulse watchdog is not answering Prometheus scrapes"
+              description: "No metrics for 1 minute. Every other alert is blind until this is fixed."
+      - alertname: BscPulseSweepsStale
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels: {severity: critical, scope: watchdog, job: bsc-pulse, instance: "bsc-pulse:9105"}
+            exp_annotations:
+              summary: "The watchdog has not finished a sweep for 3m 0s"
+              description: "Metrics are being served but are not being refreshed."

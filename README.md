@@ -26,8 +26,9 @@ Work in progress. This list is updated as each step lands.
 - [x] Comparison logic: lag, stalled endpoint, stalled chain, hash disagreement, reorg
 - [x] Long-running watchdog exporting Prometheus metrics
 - [x] Docker Compose stack with Prometheus
-- [ ] Alert rules, Grafana dashboard
-- [ ] Telegram alerts with a plain-English incident note
+- [x] Alert rules with unit tests, Alertmanager
+- [x] Telegram alerts with a plain-English incident note
+- [ ] Grafana dashboard
 - [ ] Deployment to AWS with Terraform and Ansible
 
 ## Quick start
@@ -39,8 +40,21 @@ make setup    # creates .venv and installs dependencies
 make check    # lint + tests, the same checks CI runs
 make probe    # one live sweep of every endpoint, printed as a table
 make run      # the watchdog: sweeps every 5 s, metrics on http://127.0.0.1:9105/metrics
-make up       # watchdog + Prometheus in Docker (Prometheus UI: http://127.0.0.1:9090)
+make up       # the whole stack in Docker (Prometheus UI: http://127.0.0.1:9090)
+make rules-test   # unit-test the alert rules with promtool (uses Docker)
 ```
+
+### Telegram setup (5 minutes)
+
+1. In Telegram, message **@BotFather**, send `/newbot`, and copy the token.
+2. Send any message to your new bot.
+3. Open `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy the number in
+   `"chat":{"id": ...}`.
+4. `cp .env.example .env` and fill in `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+5. Test it: `set -a; source .env; set +a; make telegram-test`. A sample note arrives.
+
+Without these settings the notifier runs as a dry run and prints each message to
+its log (`docker compose logs notifier`).
 
 `make probe` prints one table per network:
 
@@ -121,14 +135,81 @@ finishes everywhere before the next one starts.
 | `bsc_endpoint_head_regressions_total` | Times an endpoint's head went backwards |
 | `bsc_last_sweep_timestamp_seconds` | Lets an alert notice that the watchdog itself stopped |
 
-Planned shape once the remaining steps are built:
+### Alerting path
 
 ```
-public RPCs ──► watchdog ──/metrics──► Prometheus ──► Grafana
-                                          │ alert rules
-                                          ▼
-                                    Alertmanager ──► notifier ──► Telegram
+watchdog ──/metrics──► Prometheus ──alert rules──► Alertmanager ──webhook──► notifier ──► Telegram
+                           ▲                    (group, wait, repeat,         │
+                           └──── recent numbers for the note ─────────────────┘
+                                                 silence duplicates)
 ```
+
+| Piece | Job |
+|---|---|
+| `deploy/prometheus/rules/bsc.yml` | Decides what is a problem and for how long it must last |
+| `deploy/prometheus/tests/bsc_test.yml` | Unit tests that replay made-up metric history through the rules |
+| `deploy/alertmanager/alertmanager.yml` | Groups alerts, limits repeats, and silences alerts caused by another one |
+| `notifier.py` | Receives each alert and makes sure a message goes out, whatever fails |
+| `prom.py` | Asks Prometheus for the numbers behind the alert |
+| `notes.py` | Writes the incident note: what we see, likely causes, next checks |
+| `telegram.py` | Sends the note |
+
+### Alerts
+
+| Alert | Fires when | Severity |
+|---|---|---|
+| `BscEndpointLagging` | Head more than 5 s older than the newest head, for 2 min | warning |
+| `BscEndpointStalled` | Head stuck for 30 s while the network moves | critical |
+| `BscChainStalled` | Network's highest head stuck for 30 s | critical |
+| `BscEndpointDown` | No valid latest block for 2 min | warning |
+| `BscEndpointWrongChain` | `eth_chainId` does not match the network | critical |
+| `BscEndpointSyncing` | `eth_syncing` reports progress for 5 min | warning |
+| `BscEndpointErrorRate` | Over 10% of requests fail, for 5 min | warning |
+| `BscEndpointRateLimited` | More than 5 rate-limit answers in 5 min | warning |
+| `BscEndpointSlow` | p95 latency over 1 s for 10 min | warning |
+| `BscEndpointHeadFlapping` | Head went backwards more than 3 times in 10 min | warning |
+| `BscHashDisagreement` | Endpoints disagreed on a block hash more than 3 times in 10 min | warning |
+| `BscReorgObserved` | A block we had seen was replaced | warning |
+| `BscTooFewEndpoints` | Fewer than 2 usable endpoints, so no comparison | critical |
+| `BscPulseDown`, `BscPulseSweepsStale` | The watchdog itself stopped | critical |
+
+Alertmanager silences duplicates: an endpoint that is down does not also send
+error-rate, latency and lag alerts, and a stalled endpoint does not also send a
+lag alert.
+
+### Incident notes
+
+Each firing alert becomes a message like this one, produced in the end-to-end test
+against a fake endpoint (connection refused):
+
+```
+FIRING · warning · BscEndpointDown
+127.0.0.1:18104 · mainnet
+
+127.0.0.1:18104 (mainnet) has not returned a valid latest block for 2 minutes
+
+Now
+• status: down
+• failed requests (5m): 100%
+• errors (5m): connection 128
+• network head: 211,421,410, 3/4 endpoints usable, block interval 450 ms
+
+Likely causes
+1. Connections fail before any HTTP answer (DNS, TCP or TLS): the host may be
+   down, or its DNS or certificate changed.
+
+Next checks
+1. See where it fails (DNS, TLS, HTTP status): curl -sv http://127.0.0.1:18104
+2. Check that the name still resolves: dig +short 127.0.0.1
+3. Try from another machine to rule out this server's network.
+```
+
+The causes depend on the numbers. A lagging endpoint that answers in 40 ms gets
+"it serves old data: the node imports blocks too slowly". One that is also slow
+gets "overloaded node or congested path". One whose head keeps going backwards
+gets "load balancer mixing nodes".
+
+<!-- TODO(Javier): replace with a screenshot of a real Telegram message. -->
 
 ## Endpoints
 
@@ -178,6 +259,23 @@ Written so far in short form. `docs/probe-notes.md` has the evidence behind them
     The histogram lets the dashboard and alerts use percentiles.
 14. **Compose with a private network and ports on 127.0.0.1.** The same file runs on
     a Mac and on the server, and nothing listens on a public interface.
+15. **Alert thresholds in seconds, not blocks.** The block interval changed from
+    0.75 s to 0.45 s with the Fermi hard fork. "5 seconds behind" keeps its meaning
+    when it changes again; "10 blocks behind" does not.
+16. **Every alert waits before firing (`for:`).** I measured endpoints 2 to 3 blocks
+    apart on a normal day. A short spike should not wake anyone up.
+17. **Test the alert rules, not only the Python.** promtool replays made-up metric
+    history and checks exactly when each alert fires. I broke two rules on purpose
+    to check that the tests catch it.
+18. **Incident notes are rule-based, not written by an LLM.** Every sentence can be
+    traced to a line in `notes.py`, the same alert always gives the same note, and
+    it cannot invent a cause. The rules use the live numbers to pick causes, so the
+    note still adapts to the situation.
+19. **An alert always goes out.** If Prometheus does not answer, the note says so
+    and keeps the general causes. If building the note fails, the plain alert is
+    sent. If Telegram fails, the notifier answers 502 so Alertmanager retries.
+20. **The bot token never reaches a log.** `requests` puts the URL, which contains
+    the token, in its error messages, so `telegram.py` reports only the error type.
 
 ### Alternatives I rejected
 
@@ -193,6 +291,13 @@ Written so far in short form. `docs/probe-notes.md` has the evidence behind them
   than ports on localhost.
 - **Writing textfile metrics for node-exporter**, as my Bash script did. That suits
   a cron job. A long-running service can serve `/metrics` itself.
+- **Alerting from the Python code directly.** Prometheus and Alertmanager already
+  handle "for how long", grouping, repeats and silences, and the rules can be
+  tested and changed without touching the code.
+- **Alertmanager's built-in Telegram receiver.** It can send the alert text, but it
+  cannot look up live numbers or choose causes. A small webhook service can.
+- **An LLM writing the notes.** See decision 18. It is listed under what I would
+  try next, behind the same interface and with the rule-based note as fallback.
 - **An extra request per sweep to check a fixed recent block on every endpoint.**
   It would catch more disagreements, but adds load. Comparing the heads and parent
   hashes we already fetch costs nothing extra.
@@ -229,6 +334,11 @@ Ansible + Prometheus/Grafana watching one Ethereum Sepolia endpoint).
   check every block.
 - State lives in memory. After a restart, stall timers and hash history start
   again from empty.
+- Alert thresholds come from a short look at normal behaviour, not from a long
+  baseline. The hash-disagreement threshold in particular is a guess.
+- The incident notes list causes I wrote myself. They are a starting point for
+  investigation, not a diagnosis.
+- One Telegram chat receives everything; there is no routing by severity yet.
 
 ## What I'd do next
 

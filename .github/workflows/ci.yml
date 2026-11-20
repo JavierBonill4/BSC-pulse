@@ -41,11 +41,23 @@ jobs:
       - name: Build the watchdog image
         run: docker build -t bsc-pulse:ci .
 
-      - name: Check the Prometheus config
+      - name: Check the Prometheus config and alert rules
         run: >-
           docker run --rm -v "$PWD/deploy/prometheus:/etc/prometheus:ro"
           --entrypoint promtool prom/prometheus:v3.5.0
           check config /etc/prometheus/prometheus.yml
+
+      - name: Unit-test the alert rules
+        run: >-
+          docker run --rm -v "$PWD/deploy/prometheus:/etc/prometheus:ro"
+          --entrypoint promtool prom/prometheus:v3.5.0
+          test rules /etc/prometheus/tests/bsc_test.yml
+
+      - name: Check the Alertmanager config
+        run: >-
+          docker run --rm -v "$PWD/deploy/alertmanager:/etc/alertmanager:ro"
+          --entrypoint amtool prom/alertmanager:v0.28.1
+          check-config /etc/alertmanager/alertmanager.yml
 
       - name: Check the Compose file
         run: docker compose config --quiet

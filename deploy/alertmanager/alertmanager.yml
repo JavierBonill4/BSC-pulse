@@ -1,0 +1,33 @@
+# Alertmanager decides when and how often people hear about an alert.
+# Prometheus says "this is firing"; Alertmanager groups, waits, repeats and
+# silences, then hands each alert to the notifier, which writes the Telegram message.
+
+route:
+  receiver: notifier
+  # One notification per problem: the same alert on the same endpoint is one group.
+  group_by: [alertname, network, endpoint]
+  group_wait: 30s       # wait briefly so related alerts arrive together
+  group_interval: 5m    # minimum gap between updates about the same group
+  repeat_interval: 4h   # remind if still firing
+
+receivers:
+  - name: notifier
+    webhook_configs:
+      - url: http://notifier:9106/alert
+        send_resolved: true
+        max_alerts: 10
+
+inhibit_rules:
+  # If an endpoint is down, its error rate, latency and lag alerts add nothing.
+  - source_matchers: [alertname="BscEndpointDown"]
+    target_matchers:
+      - alertname=~"BscEndpoint(ErrorRate|RateLimited|Slow|Lagging|Stalled)"
+    equal: [network, endpoint]
+  # A stalled endpoint falls further behind every second, so it would also fire
+  # Lagging. One problem, one message. (Found in the end-to-end test.)
+  - source_matchers: [alertname="BscEndpointStalled"]
+    target_matchers: [alertname="BscEndpointLagging"]
+    equal: [network, endpoint]
+  # If the watchdog is not being scraped, "sweeps stale" is the same problem.
+  - source_matchers: [alertname="BscPulseDown"]
+    target_matchers: [alertname="BscPulseSweepsStale"]

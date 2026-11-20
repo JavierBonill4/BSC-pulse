@@ -1,0 +1,152 @@
+# Alert rules for BSC Pulse.
+#
+# The watchdog only measures. These rules decide what counts as a problem and for
+# how long it must last before anyone is told. Every rule has a unit test in
+# ../tests/bsc_test.yml (run with: make rules-test).
+#
+# Thresholds are in seconds where possible, not blocks. The block interval has
+# changed with hard forks (0.75 s -> 0.45 s with Fermi), and a threshold in seconds
+# keeps its meaning when it changes again.
+#
+# Labels: severity is critical (act now) or warning (look today).
+#         scope is watchdog, network or endpoint, so a note can explain the blast radius.
+
+groups:
+  - name: bsc-pulse-watchdog
+    rules:
+      - alert: BscPulseDown
+        expr: up{job="bsc-pulse"} == 0
+        for: 1m
+        labels: {severity: critical, scope: watchdog}
+        annotations:
+          summary: "The BSC Pulse watchdog is not answering Prometheus scrapes"
+          description: "No metrics for 1 minute. Every other alert is blind until this is fixed."
+
+      - alert: BscPulseSweepsStale
+        # The process answers scrapes but the sweep loop has stopped finishing.
+        expr: time() - bsc_last_sweep_timestamp_seconds > 60
+        for: 1m
+        labels: {severity: critical, scope: watchdog}
+        annotations:
+          summary: "The watchdog has not finished a sweep for {{ $value | humanizeDuration }}"
+          description: "Metrics are being served but are not being refreshed."
+
+  - name: bsc-network
+    rules:
+      - alert: BscChainStalled
+        # The highest head across every usable endpoint has not moved. At ~0.45 s per
+        # block, 30 s is more than 60 missed blocks.
+        expr: bsc_network_head_unchanged_seconds > 30 and bsc_network_usable_endpoints > 0
+        for: 30s
+        labels: {severity: critical, scope: network}
+        annotations:
+          summary: "No new {{ $labels.network }} block seen on any endpoint for {{ $value | humanizeDuration }}"
+          description: "Either the chain has stopped producing blocks, or every endpoint we watch is stuck at the same height."
+
+      - alert: BscTooFewEndpoints
+        # Comparison needs at least two usable endpoints. With one, lag cannot be measured.
+        expr: bsc_network_usable_endpoints < 2
+        for: 2m
+        labels: {severity: critical, scope: network}
+        annotations:
+          summary: "Only {{ $value }} usable endpoint(s) left on {{ $labels.network }}"
+          description: "Lag detection needs at least two usable endpoints to compare."
+
+      - alert: BscHashDisagreement
+        # Threshold is a guess, not tuned against a baseline. See README limitations.
+        expr: increase(bsc_hash_disagreements_total[10m]) > 3
+        labels: {severity: warning, scope: network}
+        annotations:
+          summary: "Endpoints on {{ $labels.network }} disagreed about block hashes {{ $value | humanize }} times in 10 minutes"
+          description: "Two endpoints reported different blocks at the same height. Possible fork or an endpoint on a minority chain."
+
+      - alert: BscReorgObserved
+        expr: increase(bsc_reorg_blocks_total[10m]) > 0
+        labels: {severity: warning, scope: network}
+        annotations:
+          summary: "A {{ $labels.network }} block we had already seen was replaced ({{ $value | humanize }} in 10 minutes)"
+          description: "A reorg past the head. With fast finality these should be very shallow and rare."
+
+  - name: bsc-endpoints
+    rules:
+      - alert: BscEndpointDown
+        expr: bsc_endpoint_up == 0
+        for: 2m
+        labels: {severity: warning, scope: endpoint}
+        annotations:
+          summary: "{{ $labels.endpoint }} ({{ $labels.network }}) has not returned a valid latest block for 2 minutes"
+          description: "Requests fail, or it answers for the wrong chain."
+
+      - alert: BscEndpointLagging
+        # The core check: it may answer quickly, but its newest block is old.
+        expr: bsc_endpoint_lag_seconds > 5
+        for: 2m
+        labels: {severity: warning, scope: endpoint}
+        annotations:
+          summary: "{{ $labels.endpoint }} ({{ $labels.network }}) is {{ $value | humanize }}s behind the highest endpoint"
+          description: "Its head is older than the newest head on the network, for 2 minutes."
+
+      - alert: BscEndpointStalled
+        # Its head is stuck while the rest of the network keeps moving.
+        expr: >
+          bsc_endpoint_head_unchanged_seconds > 30
+          and on (network) bsc_network_head_unchanged_seconds < 10
+        for: 30s
+        labels: {severity: critical, scope: endpoint}
+        annotations:
+          summary: "{{ $labels.endpoint }} ({{ $labels.network }}) has been stuck on the same block for {{ $value | humanizeDuration }}"
+          description: "Other endpoints on the network are still producing new heads."
+
+      - alert: BscEndpointWrongChain
+        expr: bsc_endpoint_wrong_chain == 1
+        for: 1m
+        labels: {severity: critical, scope: endpoint}
+        annotations:
+          summary: "{{ $labels.endpoint }} answers with the wrong chain ID for {{ $labels.network }}"
+          description: "eth_chainId does not match the configured chain. Anyone using it would read or send on another network."
+
+      - alert: BscEndpointSyncing
+        expr: bsc_endpoint_syncing == 1
+        for: 5m
+        labels: {severity: warning, scope: endpoint}
+        annotations:
+          summary: "{{ $labels.endpoint }} ({{ $labels.network }}) reports that it is syncing"
+          description: "eth_syncing has returned progress instead of false for 5 minutes."
+
+      - alert: BscEndpointErrorRate
+        expr: >
+          sum by (network, endpoint) (rate(bsc_rpc_requests_total{outcome!="ok"}[5m]))
+          / sum by (network, endpoint) (rate(bsc_rpc_requests_total[5m]))
+          > 0.1
+        for: 5m
+        labels: {severity: warning, scope: endpoint}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of requests to {{ $labels.endpoint }} ({{ $labels.network }}) are failing"
+          description: "More than 10% of JSON-RPC requests failed over the last 5 minutes."
+
+      - alert: BscEndpointRateLimited
+        expr: sum by (network, endpoint) (increase(bsc_rpc_requests_total{outcome="rate_limited"}[5m])) > 5
+        for: 1m
+        labels: {severity: warning, scope: endpoint}
+        annotations:
+          summary: "{{ $labels.endpoint }} ({{ $labels.network }}) rate-limited us {{ $value | humanize }} times in 5 minutes"
+          description: "HTTP 429 or JSON-RPC error -32005 (limit exceeded)."
+
+      - alert: BscEndpointSlow
+        expr: >
+          histogram_quantile(0.95,
+            sum by (le, network, endpoint) (rate(bsc_rpc_latency_seconds_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels: {severity: warning, scope: endpoint}
+        annotations:
+          summary: "p95 latency of {{ $labels.endpoint }} ({{ $labels.network }}) is {{ $value | humanize }}s"
+          description: "95th percentile of successful latest-block requests above 1 s for 10 minutes."
+
+      - alert: BscEndpointHeadFlapping
+        # The head keeps going backwards: usually a load balancer mixing nodes at different heights.
+        expr: increase(bsc_endpoint_head_regressions_total[10m]) > 3
+        labels: {severity: warning, scope: endpoint}
+        annotations:
+          summary: "{{ $labels.endpoint }} ({{ $labels.network }}) reported a lower head than before {{ $value | humanize }} times in 10 minutes"
+          description: "Consecutive requests seem to reach nodes at different heights."

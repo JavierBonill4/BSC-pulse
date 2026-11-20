@@ -10,6 +10,9 @@ class FakeResponse:
         self.status_code = status_code
         self.text = text
 
+    def json(self):
+        return json.loads(self.text)
+
 
 def answer(result) -> FakeResponse:
     """A successful JSON-RPC answer carrying `result`."""
