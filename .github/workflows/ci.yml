@@ -66,3 +66,33 @@ jobs:
         env:
           GRAFANA_ADMIN_PASSWORD: ci-only-not-a-secret
         run: docker compose --profile demo config --quiet
+
+  # Terraform and Ansible are checked here; they are only applied from a laptop.
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform format
+        run: terraform -chdir=infra/terraform fmt -check -recursive
+
+      - name: Terraform validate
+        run: |
+          terraform -chdir=infra/terraform init -backend=false -input=false
+          terraform -chdir=infra/terraform validate
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible
+        run: pip install "ansible>=10,<12" ansible-lint
+
+      - name: Ansible syntax check and lint
+        working-directory: infra/ansible
+        run: |
+          cp inventory/hosts.ini.example inventory/hosts.ini
+          ansible-playbook site.yml --syntax-check
+          ansible-lint --offline

@@ -1,0 +1,105 @@
+---
+# New for this project: replaces eth-node-iac's monitoring role. The whole stack is
+# the same docker-compose.yml that runs on a laptop.
+
+- name: Check that the secrets were loaded from .env
+  ansible.builtin.assert:
+    that:
+      - grafana_admin_password | length >= 8
+    fail_msg: >-
+      GRAFANA_ADMIN_PASSWORD is missing or shorter than 8 characters.
+      Set it in .env, then run make deploy (it loads .env for you).
+    quiet: true
+
+- name: Say so when Telegram is not configured
+  ansible.builtin.debug:
+    msg: >-
+      TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not set: the notifier runs as a dry
+      run and alerts only appear in its log (docker compose logs notifier).
+  when: telegram_bot_token | length == 0 or telegram_chat_id | length == 0
+
+- name: Create the application directory
+  ansible.builtin.file:
+    path: "{{ app_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy the application code
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/{{ item }}"
+    dest: "{{ app_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: u=rwX,g=rX,o=rX
+    directory_mode: "0755"
+  loop:
+    - bsc_pulse/
+    - config/
+    - Dockerfile
+    - .dockerignore
+    - requirements.txt
+    - docker-compose.yml
+
+# Kept separate so a changed file restarts Prometheus, Alertmanager and Grafana.
+- name: Copy the monitoring configuration
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/"
+    dest: "{{ app_dir }}/deploy/"
+    owner: root
+    group: root
+    mode: u=rwX,g=rX,o=rX
+    directory_mode: "0755"
+  notify: Restart monitoring services
+
+- name: Write the secrets file that Docker Compose reads
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ app_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true   # keep the password and token out of Ansible's output
+
+- name: Build the image and start the stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ app_dir }}"
+    build: always
+    profiles: "{{ ['demo'] if bsc_pulse_demo | bool else [] }}"
+    state: present
+
+# Run the restart now (if needed) rather than at the end, so the checks below
+# test the configuration that will keep running.
+- name: Apply pending restarts
+  ansible.builtin.meta: flush_handlers
+
+- name: Stop the fake endpoints when the demo is off
+  community.docker.docker_compose_v2:
+    project_src: "{{ app_dir }}"
+    profiles: [demo]
+    services: [fake-rpc]
+    state: stopped
+  when: not bsc_pulse_demo | bool
+
+# A deploy only counts as done if the stack really works.
+- name: Wait until the watchdog reports a network head
+  ansible.builtin.uri:
+    url: http://127.0.0.1:9105/metrics
+    return_content: true
+  register: bsc_pulse_metrics
+  until: bsc_pulse_metrics.status == 200 and 'bsc_network_head_block{' in bsc_pulse_metrics.content
+  retries: 20
+  delay: 6
+
+- name: Wait until Grafana is healthy
+  ansible.builtin.uri:
+    url: http://127.0.0.1:3000/api/health
+  register: bsc_pulse_grafana
+  until: bsc_pulse_grafana.status == 200
+  retries: 20
+  delay: 6
+
+- name: Show how many endpoints the watchdog can use right now
+  ansible.builtin.debug:
+    msg: "{{ bsc_pulse_metrics.content.splitlines() | select('match', '^bsc_network_usable_endpoints') | list }}"

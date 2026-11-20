@@ -1,0 +1,7 @@
+---
+# Prometheus, Alertmanager and Grafana read their configuration only at startup.
+- name: Restart monitoring services
+  community.docker.docker_compose_v2:
+    project_src: "{{ app_dir }}"
+    services: [prometheus, alertmanager, grafana]
+    state: restarted

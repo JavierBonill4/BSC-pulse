@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (git-ignored) and edit. No secrets go here: AWS
+# credentials come from your AWS CLI profile or environment variables.
+aws_region = "us-east-1"
+
+# Required. Your own IP as a /32. Find it: curl https://checkip.amazonaws.com
+allowed_ssh_cidrs = ["YOUR.IP.ADDRESS/32"]
+
+# instance_type = "t3.small"

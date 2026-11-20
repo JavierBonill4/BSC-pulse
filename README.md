@@ -30,7 +30,7 @@ Work in progress. This list is updated as each step lands.
 - [x] Telegram alerts with a plain-English incident note
 - [x] Grafana dashboard, generated from a script
 - [x] Fake endpoints you can break on demand, for demos and end-to-end tests
-- [ ] Deployment to AWS with Terraform and Ansible
+- [x] Deployment to AWS with Terraform and Ansible (adapted from my earlier project)
 
 ## Quick start
 
@@ -55,6 +55,45 @@ make rules-test   # unit-test the alert rules with promtool (uses Docker)
 
 `make up` needs a `.env` file: `cp .env.example .env` and set at least
 `GRAFANA_ADMIN_PASSWORD`. Compose refuses to start Grafana without it.
+
+### Deploy to AWS
+
+Terraform creates one Ubuntu 24.04 server. Ansible hardens it, installs Docker, and
+runs the same `docker-compose.yml` as on a laptop. Only SSH is open, and only from
+your IP; everything else is reached through an SSH tunnel.
+
+```
+your Mac ── make tf-apply ──► AWS: EC2 t3.small, security group (SSH from your IP only)
+         ── make deploy ────► Ansible: hardening → docker → bsc_pulse (compose up, smoke test)
+         ── make tunnel ────► http://127.0.0.1:3000 on your Mac = Grafana on the server
+```
+
+Needs: an AWS account with credentials set up (`aws sts get-caller-identity`
+works), Terraform, Ansible, an SSH key at `~/.ssh/id_ed25519.pub`, and a filled-in `.env`.
+
+```bash
+cp infra/terraform/terraform.tfvars.example infra/terraform/terraform.tfvars
+# edit it: allowed_ssh_cidrs = ["<your IP>/32"]   (curl https://checkip.amazonaws.com)
+
+make ansible-deps        # once: Ansible collections
+make tf-init             # once: Terraform providers
+make tf-plan             # read what will be created
+make tf-apply            # create the server; also writes the Ansible inventory
+make ping                # wait ~1 minute after apply, until this succeeds
+make deploy              # harden, install Docker, start the stack, check it works
+make tunnel              # leave running; open http://127.0.0.1:3000
+```
+
+`make deploy` finishes only if the watchdog reports a network head and Grafana is
+healthy, so a green run means the stack really works. It prints how many
+endpoints are usable on each network.
+
+For a live demo on the server: `make deploy-demo`, then with `make tunnel` running,
+`make demo-break MODE=stall` works from your Mac exactly as it does locally.
+
+> **When you are done: `make tf-destroy`.** The server costs money for every hour
+> it runs (a t3.small is a few US cents per hour; check your own account's pricing
+> and credits).
 
 ### Demo: break an endpoint on purpose
 
@@ -344,6 +383,13 @@ Written so far in short form. `docs/probe-notes.md` has the evidence behind them
     switched off, so the dashboard in git is the dashboard that runs.
 23. **Grafana has no default password.** Compose refuses to start until `.env` sets
     one. (My earlier project had `change-me` in a variables file.)
+24. **The laptop and the server run the same Compose file.** Ansible copies the
+    repository and runs `docker compose up`, so what I test locally is what runs.
+    Secrets go to a `.env` file on the server that only root can read.
+25. **SSH from the whole internet is refused by Terraform.** `allowed_ssh_cidrs`
+    has no default and rejects `0.0.0.0/0`, so forgetting to set it fails loudly.
+26. **A deploy checks that it worked.** The playbook waits for real metrics and a
+    healthy Grafana instead of stopping once the containers have started.
 
 ### Alternatives I rejected
 
@@ -366,6 +412,13 @@ Written so far in short form. `docs/probe-notes.md` has the evidence behind them
   cannot look up live numbers or choose causes. A small webhook service can.
 - **An LLM writing the notes.** See decision 18. It is listed under what I would
   try next, behind the same interface and with the rule-based note as fallback.
+- **Building the image in CI and pushing it to a registry.** The right move for a
+  team. For one server, building on the server avoids running a registry and
+  managing its credentials.
+- **Kubernetes or ECS.** Five small containers on one host do not need an
+  orchestrator. Compose keeps the deployment readable.
+- **Opening Grafana to the internet behind a password.** An SSH tunnel keeps the
+  attack surface at one port.
 - **Hand-editing the dashboard JSON, or building it in the UI and exporting it.**
   Both work, but produce large diffs nobody reviews.
 - **Grafana's own alerting.** Prometheus rules can be unit-tested with promtool and
@@ -387,7 +440,9 @@ Ansible + Prometheus/Grafana watching one Ethereum Sepolia endpoint).
 | Compose | Host networking, `:latest` images | Private network, ports on 127.0.0.1, pinned image versions |
 | Grafana | Default password in a variables file | Required from `.env`; dashboard generated from a script |
 | Conventions | Makefile targets, exit codes, `.gitignore` rules | Lint, tests and CI |
-| Infrastructure | Reused at the deployment step (not done yet) | |
+| Terraform | EC2 + security group + key pair, Ubuntu AMI via SSM, IMDSv2, encrypted disk, generated inventory | SSH CIDR required and validated; P2P ports removed |
+| Ansible | `hardening` and `docker` roles, nearly unchanged | `bsc_pulse` role: copy the app, write secrets from `.env`, compose up, smoke test |
+| Access | Everything on 127.0.0.1, SSH tunnel, SSH restricted to my IP | Same; a test checks no compose port is public |
 
 ## Known limitations
 
@@ -416,6 +471,11 @@ Ansible + Prometheus/Grafana watching one Ethereum Sepolia endpoint).
   firing for up to 10 minutes after the cause is gone.
 - The dashboard's queries are tested against a real Prometheus, but the dashboard
   itself was not rendered in CI.
+- One server, no redundancy. If it goes down, so does the monitoring, and nobody
+  is told (a second, external check would be needed).
+- Terraform state is a local file on my Mac, not in a shared backend.
+- The deployed images are built on the server, so two deploys can produce slightly
+  different images if a dependency releases a new version in between.
 
 ## What I'd do next
 

@@ -1,0 +1,17 @@
+---
+# Where the repository is on the machine running Ansible (two levels up from here).
+repo_root: "{{ playbook_dir }}/../.."
+app_dir: /opt/bsc-pulse
+
+# Firewall ports opened besides SSH. None: every service listens on 127.0.0.1
+# and is reached through the SSH tunnel (make tunnel).
+ufw_allowed_ports_tcp: []
+
+# true also runs the fake endpoints and the "demo" network (make deploy-demo).
+bsc_pulse_demo: false
+
+# Secrets come from your shell environment (make deploy loads .env first).
+# Changed from eth-node-iac, which kept the Grafana password in this file.
+grafana_admin_password: "{{ lookup('ansible.builtin.env', 'GRAFANA_ADMIN_PASSWORD') }}"
+telegram_bot_token: "{{ lookup('ansible.builtin.env', 'TELEGRAM_BOT_TOKEN') }}"
+telegram_chat_id: "{{ lookup('ansible.builtin.env', 'TELEGRAM_CHAT_ID') }}"

@@ -1,0 +1,15 @@
+---
+# make deploy runs this playbook. Roles, in order:
+#   hardening  reused from eth-node-iac: SSH keys only, firewall, fail2ban
+#   docker     reused from eth-node-iac: Docker and the Compose plugin
+#   bsc_pulse  new: copy the app, write the secrets file, start the stack, check it works
+- name: Configure the BSC Pulse server
+  hosts: bsc_pulse
+  become: true
+  roles:
+    - role: hardening
+      tags: [hardening]
+    - role: docker
+      tags: [docker]
+    - role: bsc_pulse
+      tags: [app]

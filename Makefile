@@ -1,4 +1,4 @@
-.PHONY: help setup lint format test check probe run metrics up down logs notify telegram-test rules-test alert-test dashboard fake-rpc demo demo-break demo-heal demo-status
+.PHONY: help setup lint format test check probe run metrics up down logs notify telegram-test rules-test alert-test dashboard fake-rpc demo demo-break demo-heal demo-status tf-init tf-plan tf-apply tf-destroy ansible-deps ping deploy deploy-demo tunnel ssh
 PY := .venv/bin/python
 
 help:            ## Show this list
@@ -76,3 +76,43 @@ demo-heal:       ## Make every fake endpoint healthy again
 
 demo-status:     ## Show what each fake endpoint is doing
 	@for port in 18545 18546 18547; do printf "fake-rpc:%s  " $$port; curl -s "http://127.0.0.1:$$port/control" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])'; done
+
+# ---- Deploying to AWS (Terraform creates the server, Ansible configures it) ----
+
+TF := terraform -chdir=infra/terraform
+# Load .env into the environment so Ansible can read the secrets from it.
+LOAD_ENV := set -a; [ -f .env ] && . ./.env; set +a;
+INVENTORY := infra/ansible/inventory/hosts.ini
+SERVER = $$(sed -n 's/.*ansible_host=\([^ ]*\).*/\1/p' $(INVENTORY) | head -1)
+
+tf-init:         ## Terraform: download providers (once)
+	$(TF) init
+
+tf-plan:         ## Terraform: show what would be created
+	$(TF) plan
+
+tf-apply:        ## Terraform: create the AWS server (costs money while it runs)
+	$(TF) apply
+
+tf-destroy:      ## Terraform: DELETE the server. Run this when you are done!
+	$(TF) destroy
+
+ansible-deps:    ## Install the Ansible collections the playbook needs (once)
+	cd infra/ansible && ansible-galaxy collection install -r requirements.yml
+
+ping:            ## Can Ansible reach the server?
+	cd infra/ansible && ansible all -m ping
+
+deploy:          ## Harden the server and deploy the stack (secrets come from .env)
+	@$(LOAD_ENV) cd infra/ansible && ansible-playbook site.yml
+
+deploy-demo:     ## Same, plus the fake endpoints, for a live demo on the server
+	@$(LOAD_ENV) cd infra/ansible && ansible-playbook site.yml -e bsc_pulse_demo=true
+
+tunnel:          ## Forward the server's UIs to this machine (leave running, Ctrl+C to stop)
+	@echo "Grafana http://127.0.0.1:3000  Prometheus :9090  Alertmanager :9093  (Ctrl+C to stop)"
+	ssh -N -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 -L 9093:127.0.0.1:9093 \
+	  -L 18547:127.0.0.1:18547 ubuntu@$(SERVER)
+
+ssh:             ## Open a shell on the server (the stack is in /opt/bsc-pulse)
+	ssh ubuntu@$(SERVER)
