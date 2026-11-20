@@ -1,0 +1,12 @@
+# Grafana reads this at startup, so the Prometheus data source exists without any
+# clicking. The fixed uid is what the dashboard's panels refer to.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 5s   # the watchdog's scrape interval; sizes $__rate_interval

@@ -49,3 +49,30 @@ def test_the_shipped_config_is_valid():
     # Comparing endpoints only works with at least two per network.
     for network in by_network:
         assert sum(e.network == network for e in endpoints) >= 2
+
+
+def test_several_files_can_be_combined(tmp_path):
+    first = tmp_path / "a.yaml"
+    first.write_text("networks:\n  mainnet: {chain_id: 56, endpoints: [https://a.example]}\n")
+    second = tmp_path / "b.yaml"
+    second.write_text("networks:\n  demo: {chain_id: 56, endpoints: [http://fake:1]}\n")
+    endpoints = load_endpoints(f"{first}, {second}")
+    assert [(e.network, e.name) for e in endpoints] == [
+        ("mainnet", "a.example"),
+        ("demo", "fake:1"),
+    ]
+
+
+def test_a_network_defined_twice_across_files_is_an_error(tmp_path):
+    a = tmp_path / "a.yaml"
+    a.write_text("networks:\n  mainnet: {chain_id: 56, endpoints: [https://a.example]}\n")
+    with pytest.raises(ConfigError, match="more than one file"):
+        load_endpoints(f"{a},{a}")
+
+
+def test_the_shipped_demo_config_combines_with_the_real_one():
+    from bsc_pulse.config import DEFAULT_CONFIG_PATH
+
+    demo = DEFAULT_CONFIG_PATH.parent / "endpoints.demo.yaml"
+    endpoints = load_endpoints(f"{DEFAULT_CONFIG_PATH},{demo}")
+    assert {e.network for e in endpoints} == {"mainnet", "chapel", "demo"}

@@ -1,4 +1,4 @@
-.PHONY: help setup lint format test check probe run metrics up down logs notify telegram-test rules-test alert-test
+.PHONY: help setup lint format test check probe run metrics up down logs notify telegram-test rules-test alert-test dashboard fake-rpc demo demo-break demo-heal demo-status
 PY := .venv/bin/python
 
 help:            ## Show this list
@@ -55,3 +55,24 @@ rules-test:      ## Check the alert rules and run their unit tests (uses Docker)
 alert-test:      ## Post a fake alert to a running notifier (make up first)
 	@curl -s -X POST http://127.0.0.1:9106/alert -H 'Content-Type: application/json' \
 	  --data '{"alerts":[{"status":"firing","labels":{"alertname":"BscEndpointLagging","severity":"warning","network":"mainnet","endpoint":"bsc-dataseed.bnbchain.org"},"annotations":{"summary":"TEST: manual alert from make alert-test"}}]}'; echo
+
+dashboard:       ## Rebuild the Grafana dashboard JSON from deploy/grafana/build_dashboard.py
+	@$(PY) deploy/grafana/build_dashboard.py
+
+fake-rpc:        ## Run the fake endpoints locally on ports 18545-18547 (no Docker)
+	@$(PY) -m bsc_pulse.fake_rpc
+
+DEMO_CONFIG := config/endpoints.yaml,config/endpoints.demo.yaml
+
+demo:            ## Start the stack plus fake endpoints you can break (network "demo")
+	BSC_PULSE_CONFIG=$(DEMO_CONFIG) docker compose --profile demo up -d --build
+
+MODE ?= stall
+demo-break:      ## Break the third fake endpoint: make demo-break MODE=stall|lag|slow|error|ratelimit|fork|wrong_chain|syncing|timeout
+	@curl -s "http://127.0.0.1:18547/control?mode=$(MODE)" | python3 -c 'import json,sys; s=json.load(sys.stdin); print("fake-rpc:18547 is now", s["mode"])'
+
+demo-heal:       ## Make every fake endpoint healthy again
+	@for port in 18545 18546 18547; do curl -s -o /dev/null "http://127.0.0.1:$$port/control?mode=healthy"; done; echo "all fake endpoints healthy"
+
+demo-status:     ## Show what each fake endpoint is doing
+	@for port in 18545 18546 18547; do printf "fake-rpc:%s  " $$port; curl -s "http://127.0.0.1:$$port/control" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])'; done

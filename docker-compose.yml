@@ -2,6 +2,9 @@
 #
 # Every port is published on 127.0.0.1 only, so nothing is reachable from outside
 # the machine. On the server, reach the UIs through an SSH tunnel.
+#
+#   make up     the real endpoints
+#   make demo   the real endpoints plus fake ones you can break (profile "demo")
 
 services:
   bsc-pulse:
@@ -11,6 +14,8 @@ services:
     environment:
       BSC_PULSE_INTERVAL: ${BSC_PULSE_INTERVAL:-5}
       BSC_PULSE_TIMEOUT: ${BSC_PULSE_TIMEOUT:-3}
+      # make demo adds config/endpoints.demo.yaml here
+      BSC_PULSE_CONFIG: ${BSC_PULSE_CONFIG:-config/endpoints.yaml}
     ports:
       - "127.0.0.1:9105:9105"
 
@@ -45,6 +50,7 @@ services:
 
   # Same image as the watchdog, different command.
   notifier:
+    build: .
     image: bsc-pulse:local
     restart: unless-stopped
     command: ["python", "-m", "bsc_pulse.notifier"]
@@ -59,6 +65,37 @@ services:
     depends_on:
       - bsc-pulse
 
+  grafana:
+    image: grafana/grafana:12.0.0
+    restart: unless-stopped
+    environment:
+      # Required: `make up` refuses to start until .env sets it.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/bsc-pulse.json
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+
+  # Fake endpoints for demos. Only started with --profile demo (make demo).
+  fake-rpc:
+    build: .
+    image: bsc-pulse:local
+    profiles: [demo]
+    restart: unless-stopped
+    command:
+      ["python", "-m", "bsc_pulse.fake_rpc", "--host", "0.0.0.0", "--ports", "18545,18546,18547"]
+    ports:
+      - "127.0.0.1:18545-18547:18545-18547"
+
 volumes:
   prometheus-data:
   alertmanager-data:
+  grafana-data:

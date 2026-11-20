@@ -1,0 +1,14 @@
+# A "demo" network of fake endpoints (bsc_pulse/fake_rpc.py) that you can break on
+# purpose to show an alert firing. Used only by `make demo`, which loads this file
+# next to the real config/endpoints.yaml.
+#
+# Break one:  make demo-break MODE=stall     (or lag, slow, error, ratelimit, fork...)
+# Fix it:     make demo-heal
+
+networks:
+  demo:
+    chain_id: 56
+    endpoints:
+      - http://fake-rpc:18545
+      - http://fake-rpc:18546
+      - http://fake-rpc:18547

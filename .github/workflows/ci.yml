@@ -32,6 +32,9 @@ jobs:
       - name: Tests
         run: pytest -q
 
+      - name: Dashboard JSON is generated from the script
+        run: python deploy/grafana/build_dashboard.py --check
+
   # The container image and the Prometheus config must stay valid too.
   docker:
     runs-on: ubuntu-latest
@@ -59,5 +62,7 @@ jobs:
           --entrypoint amtool prom/alertmanager:v0.28.1
           check-config /etc/alertmanager/alertmanager.yml
 
-      - name: Check the Compose file
-        run: docker compose config --quiet
+      - name: Check the Compose file (including the demo profile)
+        env:
+          GRAFANA_ADMIN_PASSWORD: ci-only-not-a-secret
+        run: docker compose --profile demo config --quiet

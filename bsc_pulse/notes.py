@@ -359,7 +359,10 @@ def _when(timestamp: str | None) -> datetime | None:
 def _duration(start: datetime | None, end: datetime | None) -> str | None:
     if start is None or end is None:
         return None
-    minutes = max(0, int((end - start).total_seconds() // 60))
+    seconds = max(0, int((end - start).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
     return f"{minutes // 60}h {minutes % 60}m" if minutes >= 60 else f"{minutes}m"
 
 
@@ -372,19 +375,21 @@ def build_note(alert: dict, context: dict | None) -> str:
     summary = escape(annotations.get("summary", ""))
     started = _when(alert.get("startsAt"))
 
+    endpoint = labels.get("endpoint", "")
+    network = labels.get("network", "")
+    where = " · ".join(escape(x) for x in (endpoint, network) if x)
+
     if status == "resolved":
         lasted = _duration(started, _when(alert.get("endsAt")))
         header = f"<b>RESOLVED</b> · {escape(name)}" + (f" · lasted {lasted}" if lasted else "")
-        return f"{header}\n{summary}"
+        lines = [header, where, f"was: {summary}" if summary else ""]
+        return "\n".join(line for line in lines if line)
 
-    endpoint = labels.get("endpoint", "")
-    network = labels.get("network", "")
     ep = (context or {}).get("endpoint") or {}
     net = (context or {}).get("network") or {}
     url = ep.get("url") or (f"https://{endpoint}" if endpoint else "<endpoint url>")
     play = PLAYBOOK.get(name, DEFAULT_PLAY)
 
-    where = " · ".join(escape(x) for x in (endpoint, network) if x)
     parts = [
         f"<b>FIRING</b> · {escape(labels.get('severity', '?'))} · {escape(name)}"
         + (f"\n{where}" if where else ""),

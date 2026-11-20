@@ -59,7 +59,21 @@ def parse_endpoints(raw: object) -> list[Endpoint]:
 
 
 def load_endpoints(path: str | Path | None = None) -> list[Endpoint]:
-    """Read endpoints from `path`, or $BSC_PULSE_CONFIG, or config/endpoints.yaml."""
-    config_path = Path(path or os.environ.get("BSC_PULSE_CONFIG") or DEFAULT_CONFIG_PATH)
-    with open(config_path) as handle:
-        return parse_endpoints(yaml.safe_load(handle))
+    """Read endpoints from `path`, or $BSC_PULSE_CONFIG, or config/endpoints.yaml.
+
+    Several files can be given separated by commas, e.g. the real networks plus the
+    demo network: "config/endpoints.yaml,config/endpoints.demo.yaml". A network may
+    appear in only one of them.
+    """
+    spec = str(path or os.environ.get("BSC_PULSE_CONFIG") or DEFAULT_CONFIG_PATH)
+    networks: dict = {}
+    for part in spec.split(","):
+        with open(part.strip()) as handle:
+            raw = yaml.safe_load(handle)
+        if not isinstance(raw, dict) or not isinstance(raw.get("networks"), dict):
+            raise ConfigError(f"{part}: config must have a top-level 'networks' mapping")
+        for name, settings in raw["networks"].items():
+            if name in networks:
+                raise ConfigError(f"{part}: network '{name}' is defined in more than one file")
+            networks[name] = settings
+    return parse_endpoints({"networks": networks})

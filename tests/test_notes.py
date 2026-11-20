@@ -122,8 +122,18 @@ def test_without_context_the_note_still_has_causes_and_checks():
 
 def test_resolved_note_is_short_and_says_how_long_it_lasted():
     note = notes.build_note(alert(status="resolved"), None)
-    assert note.startswith("<b>RESOLVED</b> · BscEndpointLagging · lasted 7m")
+    lines = note.splitlines()
+    assert lines[0] == "<b>RESOLVED</b> · BscEndpointLagging · lasted 7m"
+    assert lines[1] == "bsc-dataseed.defibit.io · mainnet"
+    assert lines[2].startswith("was: ")
     assert "Likely causes" not in note
+
+
+def test_short_incidents_are_reported_in_seconds():
+    # Seen in the end-to-end test: a 50 s alert used to say "lasted 0m".
+    short = alert(status="resolved")
+    short["endsAt"] = "2026-11-20T12:01:50Z"
+    assert "lasted 50s" in notes.build_note(short, None)
 
 
 def test_unknown_alert_uses_the_default_play():
