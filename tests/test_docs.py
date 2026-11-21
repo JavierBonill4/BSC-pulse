@@ -45,3 +45,28 @@ def test_every_alert_rule_is_documented_in_the_readme():
     names = {r["alert"] for g in rules["groups"] for r in g["rules"]}
     readme = (ROOT / "README.md").read_text()
     assert {n for n in names if f"`{n}`" not in readme} == set()
+
+
+def github_anchor(heading: str) -> str:
+    """The #anchor GitHub generates for a heading: lowercase, punctuation dropped,
+    spaces turned into hyphens."""
+    text = heading.strip().lower().replace("`", "")
+    text = re.sub(r"[^\w\- ]", "", text)
+    return text.replace(" ", "-")
+
+
+@pytest.mark.parametrize("doc", DOCS, ids=lambda p: p.name)
+def test_section_links_point_at_real_headings(doc):
+    text = doc.read_text()
+    without_code = re.sub(r"```.*?```", "", text, flags=re.S)
+    anchors = {github_anchor(h) for h in re.findall(r"^#+ (.+)$", without_code, re.M)}
+    links = set(re.findall(r"\]\(#([^)]+)\)", text))
+    assert links - anchors == set()
+
+
+def test_github_anchor():
+    assert github_anchor("What I'd do next") == "what-id-do-next"
+    assert github_anchor("1. Create your `.env`") == "1-create-your-env"
+    assert github_anchor("The idea: fast is not the same as fresh") == (
+        "the-idea-fast-is-not-the-same-as-fresh"
+    )
