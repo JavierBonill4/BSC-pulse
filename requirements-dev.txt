@@ -1,3 +1,4 @@
 -r requirements.txt
 pytest>=8
-ruff>=0.6
+# Exact version: a new ruff release can change formatting and fail CI with no code change.
+ruff==0.17.6

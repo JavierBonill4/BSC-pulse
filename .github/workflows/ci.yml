@@ -7,17 +7,23 @@ on:
 permissions:
   contents: read
 
+# Runners are pinned to Ubuntu 24.04 instead of ubuntu-latest. When GitHub moved
+# ubuntu-latest to 26.04, Python 3.9 (end of life, no builds for 26.04) broke the
+# 3.9 job. A pinned runner only changes when we change it.
+
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
+      # Report every Python version, instead of cancelling the others on the first failure.
+      fail-fast: false
       matrix:
         # 3.9 is the default python3 on macOS; 3.12 is what the Docker image runs.
         python-version: ["3.9", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -41,9 +47,9 @@ jobs:
 
   # The container image and the Prometheus config must stay valid too.
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build the watchdog image
         run: docker build -t bsc-pulse:ci .
@@ -73,11 +79,11 @@ jobs:
 
   # Terraform and Ansible are checked here; they are only applied from a laptop.
   infra:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
 
       - name: Terraform format
         run: terraform -chdir=infra/terraform fmt -check -recursive
@@ -87,7 +93,7 @@ jobs:
           terraform -chdir=infra/terraform init -backend=false -input=false
           terraform -chdir=infra/terraform validate
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
